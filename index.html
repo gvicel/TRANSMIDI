@@ -202,17 +202,15 @@
       const buffer = new Uint8Array(rawMidiBytes);
       let offset = 0;
 
-      // Leer cabecera MThd
-      offset += 8; // MThd + largo
+      // MThd Header
+      offset += 8; 
       const format = (buffer[offset] << 8) | buffer[offset + 1];
       const numTracks = (buffer[offset + 2] << 8) | buffer[offset + 3];
       offset += 6;
 
-      // Recorrer cada pista MTrk de manera estricta
       for (let t = 0; t < numTracks; t++) {
         if (offset >= buffer.length) break;
 
-        // Verificar MTrk
         if (buffer[offset] === 0x4D && buffer[offset+1] === 0x54 && buffer[offset+2] === 0x52 && buffer[offset+3] === 0x6B) {
           offset += 4;
           const trackLength = (buffer[offset] << 24) | (buffer[offset+1] << 16) | (buffer[offset+2] << 8) | buffer[offset+3];
@@ -222,7 +220,7 @@
           let runningStatus = 0;
 
           while (offset < trackEnd && offset < buffer.length) {
-            // Decodificar Delta-time Variable Length Quantity (VLQ)
+            // Delta-time VLQ
             let byte;
             do {
               byte = buffer[offset++];
@@ -232,7 +230,7 @@
 
             let statusByte = buffer[offset];
 
-            // Manejo de Running Status (si el byte no tiene el bit alto activo, reutiliza el status anterior)
+            // Running Status Check
             if ((statusByte & 0x80) === 0) {
               statusByte = runningStatus;
             } else {
@@ -242,33 +240,32 @@
 
             const command = statusByte & 0xF0;
 
-            // Eventos MIDI de Note Off (0x80) y Note On (0x90)
+            // Note Off (0x80) o Note On (0x90)
             if (command === 0x80 || command === 0x90) {
               let note = buffer[offset];
+              let velocity = buffer[offset + 1];
 
-              // Aplicar mapeo
+              // Mapeo preciso de nota
               if (rules[note] !== undefined) {
-                note = rules[note];
+                buffer[offset] = rules[note];
               }
 
-              // Aplicar desplazamiento de octava
+              // Aplicar octava a la nota modificada o no modificada
               if (octaveShift !== 0) {
-                note = Math.max(0, Math.min(127, note + octaveShift));
+                let currentPitch = buffer[offset];
+                buffer[offset] = Math.max(0, Math.min(127, currentPitch + octaveShift));
               }
 
-              buffer[offset] = note; // Actualizar el byte de la nota de forma segura
-              offset += 2; // Saltar byte de nota y byte de velocity
+              offset += 2; // Avanzar exactamente nota y velocidad
             } 
             else if (command === 0xA0 || command === 0xB0 || command === 0xE0) {
-              offset += 2; // Eventos de 2 datos (Polyphonic key pressure, Control Change, Pitch Bend)
+              offset += 2; 
             } 
             else if (command === 0xC0 || command === 0xD0) {
-              offset += 1; // Eventos de 1 dato (Program Change, Channel Pressure)
+              offset += 1; 
             } 
             else if (statusByte === 0xFF) {
-              // Meta evento
-              offset++; // tipo
-              // Leer longitud VLQ
+              offset++; // Type
               let len = 0;
               do {
                 byte = buffer[offset++];
@@ -277,7 +274,6 @@
               offset += len;
             } 
             else if (statusByte === 0xF0 || statusByte === 0xF7) {
-              // Eventos SysEx
               let len = 0;
               do {
                 byte = buffer[offset++];
@@ -291,7 +287,6 @@
         }
       }
 
-      // Exportar archivo sin errores de timing ni notas pegadas
       const blob = new Blob([buffer], { type: 'audio/midi' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
