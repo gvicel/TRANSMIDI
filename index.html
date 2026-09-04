@@ -4,8 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TRANSMIDI - Mapeador MIDI</title>
-  <!-- Cargamos la librería MIDI compatible -->
-  <script src="https://unpkg.com/@tonejs/midi@2.0.28/dist/Midi.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -89,7 +87,7 @@
       background-color: #cccccc;
       cursor: not-allowed;
     }
-    .status { margin-top: 15px; font-size: 0.9rem; text-align: center; color: #107c41; font-weight: 600; }
+    .status { margin-top: 15px; font-size: 0.9rem; text-align: center; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -122,16 +120,8 @@
   <script>
     const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
     let octaveShift = 0;
-    let currentMidiData = null;
+    let rawMidiBytes = null;
     let originalFileName = "archivo.mid";
-
-    // Función para obtener la referencia de la clase Midi cargada
-    function getMidiClass() {
-      if (typeof Midi !== 'undefined') {
-        return typeof Midi === 'function' ? Midi : Midi.Midi;
-      }
-      return null;
-    }
 
     function getNoteName(midiNum) {
       const octave = Math.floor(midiNum / 12) - 1;
@@ -139,10 +129,9 @@
       return `${name}${octave} (MIDI ${midiNum})`;
     }
 
-    // Inicializar las 12 filas inmediatamente al cargar la página
+    // Crear las 12 filas inmediatamente
     document.addEventListener('DOMContentLoaded', () => {
       const container = document.getElementById('rowsContainer');
-      
       let optionsHTML = '<option value="">-- Sin cambio --</option>';
       for (let n = 0; n <= 127; n++) {
         optionsHTML += `<option value="${n}">${getNoteName(n)}</option>`;
@@ -161,7 +150,7 @@
       }
     });
 
-    // Manejar selección de botones de octava
+    // Control de octavas
     document.querySelectorAll('.btn-octave').forEach(btn => {
       btn.addEventListener('click', () => {
         const shift = parseInt(btn.dataset.shift, 10);
@@ -176,7 +165,7 @@
       });
     });
 
-    // Cargar y procesar el archivo MIDI
+    // Cargar archivo binario puro
     document.getElementById('midiInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -186,26 +175,25 @@
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const MidiParser = getMidiClass();
-
-        if (!MidiParser) {
-          throw new Error('La librería MIDI no se cargó correctamente.');
+        rawMidiBytes = new Uint8Array(arrayBuffer);
+        
+        // Validar que sea un archivo MIDI (Header MThd)
+        if (rawMidiBytes[0] !== 0x4D || rawMidiBytes[1] !== 0x54 || rawMidiBytes[2] !== 0x68 || rawMidiBytes[3] !== 0x64) {
+          throw new Error("No es un archivo MIDI válido");
         }
 
-        currentMidiData = new MidiParser(arrayBuffer);
         document.getElementById('exportBtn').disabled = false;
         statusMsg.style.color = '#107c41';
-        statusMsg.textContent = '¡Archivo cargado correctamente!';
+        statusMsg.textContent = '¡Archivo cargado con éxito!';
       } catch (err) {
         statusMsg.style.color = '#d93025';
-        statusMsg.textContent = 'Error al leer el archivo MIDI. Verifica el archivo.';
-        console.error(err);
+        statusMsg.textContent = 'Error: El archivo seleccionado no es un MIDI válido.';
       }
     });
 
-    // Exportar nuevo archivo
+    // Modificador directo del flujo de bytes MIDI
     document.getElementById('exportBtn').addEventListener('click', () => {
-      if (!currentMidiData) return;
+      if (!rawMidiBytes) return;
 
       const rules = {};
       document.querySelectorAll('.mapping-row').forEach(row => {
@@ -216,20 +204,37 @@
         }
       });
 
-      currentMidiData.tracks.forEach(track => {
-        track.notes.forEach(note => {
-          if (rules[note.midi] !== undefined) {
-            note.midi = rules[note.midi];
-          }
-          if (octaveShift !== 0) {
-            let newPitch = note.midi + octaveShift;
-            note.midi = Math.max(0, Math.min(127, newPitch));
-          }
-        });
-      });
+      // Crear copia modificable de los bytes
+      const modifiedBytes = new Uint8Array(rawMidiBytes);
+      let i = 0;
 
-      const modifiedMidiArray = currentMidiData.toArray();
-      const blob = new Blob([modifiedMidiArray], { type: 'audio/midi' });
+      // Buscar mensajes Note On (0x90-0x9F) y Note Off (0x80-0x8F)
+      while (i < modifiedBytes.length - 2) {
+        const statusByte = modifiedBytes[i];
+        const command = statusByte & 0xF0;
+
+        if (command === 0x80 || command === 0x90) {
+          let note = modifiedBytes[i + 1];
+
+          // Aplicar regla de sustitución si existe
+          if (rules[note] !== undefined) {
+            note = rules[note];
+          }
+
+          // Aplicar desplazamiento de octava
+          if (octaveShift !== 0) {
+            note = Math.max(0, Math.min(127, note + octaveShift));
+          }
+
+          modifiedBytes[i + 1] = note;
+          i += 3; // Avanzar pasando los datos de nota y velocidad
+        } else {
+          i++;
+        }
+      }
+
+      // Descargar el archivo procesado
+      const blob = new Blob([modifiedBytes], { type: 'audio/midi' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
