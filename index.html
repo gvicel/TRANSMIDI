@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mapeador de Notas MIDI</title>
-  <script src="https://unpkg.com/@tonejs/midi"></script>
+  <title>TRANSMIDI - Mapeador MIDI</title>
+  <!-- Cargamos la librería MIDI compatible -->
+  <script src="https://unpkg.com/@tonejs/midi@2.0.28/dist/Midi.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -24,7 +25,6 @@
     h2 { margin-top: 0; font-size: 1.5rem; text-align: center; }
     .section-title { font-weight: bold; margin: 20px 0 10px 0; font-size: 1rem; border-bottom: 2px solid #f0f2f5; padding-bottom: 6px; }
     
-    /* Carga de archivo */
     .file-input {
       width: 100%;
       padding: 10px;
@@ -34,7 +34,6 @@
       cursor: pointer;
     }
     
-    /* Filas de mapeo */
     .rows-container { max-height: 380px; overflow-y: auto; padding-right: 5px; }
     .mapping-row {
       display: flex;
@@ -55,7 +54,6 @@
       font-size: 0.85rem;
     }
     
-    /* Botones de octava */
     .octave-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -63,7 +61,7 @@
       margin-bottom: 20px;
     }
     .btn-octave {
-      padding: 8px;
+      padding: 10px;
       border: 1px solid #0066cc;
       background: white;
       color: #0066cc;
@@ -76,7 +74,6 @@
       color: white;
     }
 
-    /* Botón exportar */
     .btn-export {
       width: 100%;
       padding: 14px;
@@ -98,14 +95,17 @@
 <body>
 
   <div class="card">
-    <h2>Mapeador MIDI</h2>
+    <h2>TRANSMIDI - Mapeador MIDI</h2>
 
+    <!-- 1. Importar -->
     <div class="section-title">1. Seleccionar archivo MIDI</div>
     <input type="file" id="midiInput" class="file-input" accept=".mid,.midi">
 
+    <!-- 2. Mapeo de notas (12 filas) -->
     <div class="section-title">2. Reglas de reemplazo (Hasta 12)</div>
     <div class="rows-container" id="rowsContainer"></div>
 
+    <!-- 3. Octavas -->
     <div class="section-title">3. Transposición global (Opcional)</div>
     <div class="octave-grid">
       <button class="btn-octave" data-shift="12">+1 Octava</button>
@@ -114,6 +114,7 @@
       <button class="btn-octave" data-shift="-24">-2 Octavas</button>
     </div>
 
+    <!-- 4. Exportar -->
     <button id="exportBtn" class="btn-export" disabled>Exportar Archivo MIDI</button>
     <div id="statusMsg" class="status"></div>
   </div>
@@ -124,39 +125,48 @@
     let currentMidiData = null;
     let originalFileName = "archivo.mid";
 
-    // Generar nombres de notas desde C-1 (0) hasta G9 (127)
+    // Función para obtener la referencia de la clase Midi cargada
+    function getMidiClass() {
+      if (typeof Midi !== 'undefined') {
+        return typeof Midi === 'function' ? Midi : Midi.Midi;
+      }
+      return null;
+    }
+
     function getNoteName(midiNum) {
       const octave = Math.floor(midiNum / 12) - 1;
       const name = noteNames[midiNum % 12];
       return `${name}${octave} (MIDI ${midiNum})`;
     }
 
-    // Construir las 12 filas con desplegables
-    const container = document.getElementById('rowsContainer');
-    for (let i = 1; i <= 12; i++) {
-      const row = document.createElement('div');
-      row.className = 'mapping-row';
-
+    // Inicializar las 12 filas inmediatamente al cargar la página
+    document.addEventListener('DOMContentLoaded', () => {
+      const container = document.getElementById('rowsContainer');
+      
       let optionsHTML = '<option value="">-- Sin cambio --</option>';
       for (let n = 0; n <= 127; n++) {
         optionsHTML += `<option value="${n}">${getNoteName(n)}</option>`;
       }
 
-      row.innerHTML = `
-        <span class="row-label">Fila ${i}</span>
-        <select class="source-note">${optionsHTML}</select>
-        <span>➔</span>
-        <select class="target-note">${optionsHTML}</select>
-      `;
-      container.appendChild(row);
-    }
+      for (let i = 1; i <= 12; i++) {
+        const row = document.createElement('div');
+        row.className = 'mapping-row';
+        row.innerHTML = `
+          <span class="row-label">Fila ${i}</span>
+          <select class="source-note">${optionsHTML}</select>
+          <span>➔</span>
+          <select class="target-note">${optionsHTML}</select>
+        `;
+        container.appendChild(row);
+      }
+    });
 
-    // Manejar selección de octavas
+    // Manejar selección de botones de octava
     document.querySelectorAll('.btn-octave').forEach(btn => {
       btn.addEventListener('click', () => {
         const shift = parseInt(btn.dataset.shift, 10);
         if (octaveShift === shift) {
-          octaveShift = 0; // Desactivar si vuelve a hacer clic
+          octaveShift = 0;
           btn.classList.remove('active');
         } else {
           document.querySelectorAll('.btn-octave').forEach(b => b.classList.remove('active'));
@@ -166,19 +176,74 @@
       });
     });
 
-    // Cargar archivo
+    // Cargar y procesar el archivo MIDI
     document.getElementById('midiInput').addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
       originalFileName = file.name;
-      const arrayBuffer = await file.arrayBuffer();
-      currentMidiData = new Midi(arrayBuffer);
+      const statusMsg = document.getElementById('statusMsg');
 
-      document.getElementById('exportBtn').disabled = false;
-      document.getElementById('statusMsg').textContent = '¡Archivo listo para procesar!';
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const MidiParser = getMidiClass();
+
+        if (!MidiParser) {
+          throw new Error('La librería MIDI no se cargó correctamente.');
+        }
+
+        currentMidiData = new MidiParser(arrayBuffer);
+        document.getElementById('exportBtn').disabled = false;
+        statusMsg.style.color = '#107c41';
+        statusMsg.textContent = '¡Archivo cargado correctamente!';
+      } catch (err) {
+        statusMsg.style.color = '#d93025';
+        statusMsg.textContent = 'Error al leer el archivo MIDI. Verifica el archivo.';
+        console.error(err);
+      }
     });
 
-    // Procesar y exportar
+    // Exportar nuevo archivo
     document.getElementById('exportBtn').addEventListener('click', () => {
-      if (!currentMidiData)
+      if (!currentMidiData) return;
+
+      const rules = {};
+      document.querySelectorAll('.mapping-row').forEach(row => {
+        const src = row.querySelector('.source-note').value;
+        const tgt = row.querySelector('.target-note').value;
+        if (src !== "" && tgt !== "") {
+          rules[parseInt(src, 10)] = parseInt(tgt, 10);
+        }
+      });
+
+      currentMidiData.tracks.forEach(track => {
+        track.notes.forEach(note => {
+          if (rules[note.midi] !== undefined) {
+            note.midi = rules[note.midi];
+          }
+          if (octaveShift !== 0) {
+            let newPitch = note.midi + octaveShift;
+            note.midi = Math.max(0, Math.min(127, newPitch));
+          }
+        });
+      });
+
+      const modifiedMidiArray = currentMidiData.toArray();
+      const blob = new Blob([modifiedMidiArray], { type: 'audio/midi' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'mapeado_' + originalFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const statusMsg = document.getElementById('statusMsg');
+      statusMsg.style.color = '#107c41';
+      statusMsg.textContent = '¡Archivo modificado y descargado con éxito!';
+    });
+  </script>
+
+</body>
+</html>
